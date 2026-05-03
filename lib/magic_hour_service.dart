@@ -27,7 +27,7 @@ class MagicHourService {
       id: 'ltx-2.3',
       label: 'LTX-2.3',
       creditsPerSecond: 30,
-      durations: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20],
+      durations: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30],
       resolutions: <String>['480p', '720p', '1080p'],
       supportsAudio: true,
     ),
@@ -39,15 +39,71 @@ class MagicHourService {
       resolutions: <String>['480p', '720p', '1080p'],
       supportsAudio: false,
     ),
+    ModelOption(
+      id: 'seedance',
+      label: 'Seedance',
+      creditsPerSecond: 45,
+      durations: <int>[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      resolutions: <String>['480p', '720p', '1080p'],
+      supportsAudio: false,
+    ),
+    ModelOption(
+      id: 'seedance-2.0',
+      label: 'Seedance 2.0',
+      creditsPerSecond: 65,
+      durations: <int>[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      resolutions: <String>['480p', '720p'],
+      supportsAudio: true,
+    ),
+    ModelOption(
+      id: 'kling-2.5',
+      label: 'Kling 2.5',
+      creditsPerSecond: 75,
+      durations: <int>[5, 10],
+      resolutions: <String>['720p', '1080p'],
+      supportsAudio: true,
+    ),
+    ModelOption(
+      id: 'kling-3.0',
+      label: 'Kling 3.0',
+      creditsPerSecond: 90,
+      durations: <int>[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      resolutions: <String>['720p', '1080p'],
+      supportsAudio: true,
+    ),
+    ModelOption(
+      id: 'veo3.1',
+      label: 'Veo 3.1',
+      creditsPerSecond: 180,
+      durations: <int>[4, 6, 8, 16, 24, 32, 40, 48, 56],
+      resolutions: <String>['720p', '1080p'],
+      supportsAudio: true,
+    ),
+    ModelOption(
+      id: 'veo3.1-lite',
+      label: 'Veo 3.1 Lite',
+      creditsPerSecond: 95,
+      durations: <int>[8, 16, 24, 32, 40, 48, 56],
+      resolutions: <String>['720p', '1080p'],
+      supportsAudio: true,
+    ),
+    ModelOption(
+      id: 'sora-2',
+      label: 'Sora 2',
+      creditsPerSecond: 120,
+      durations: <int>[4, 8, 12, 24, 36, 48, 60],
+      resolutions: <String>['720p'],
+      supportsAudio: true,
+    ),
   ];
 
   static const List<ModelOption> imageModels = <ModelOption>[
     ModelOption(
-      id: 'nano-banana-2',
-      label: 'Nano Banana 2',
-      creditsPerImage: 100,
-      imageCounts: <int>[1, 4, 9, 16],
-      resolutions: <String>['640px', '1k', '2k', '4k'],
+      id: 'flux-schnell',
+      label: 'Flux Schnell',
+      creditsPerImage: 5,
+      imageCounts: <int>[1, 2, 3, 4],
+      resolutions: <String>['640px', '1k', '2k'],
     ),
     ModelOption(
       id: 'z-image-turbo',
@@ -63,6 +119,27 @@ class MagicHourService {
       imageCounts: <int>[1, 2, 3, 4],
       resolutions: <String>['640px', '1k', '2k', '4k'],
     ),
+    ModelOption(
+      id: 'nano-banana',
+      label: 'Nano Banana',
+      creditsPerImage: 50,
+      imageCounts: <int>[1, 2, 3, 4],
+      resolutions: <String>['640px', '1k'],
+    ),
+    ModelOption(
+      id: 'nano-banana-2',
+      label: 'Nano Banana 2',
+      creditsPerImage: 100,
+      imageCounts: <int>[1, 4, 9, 16],
+      resolutions: <String>['640px', '1k', '2k', '4k'],
+    ),
+    ModelOption(
+      id: 'nano-banana-pro',
+      label: 'Nano Banana Pro',
+      creditsPerImage: 150,
+      imageCounts: <int>[1, 4, 9, 16],
+      resolutions: <String>['1k', '2k', '4k'],
+    ),
   ];
 
   final http.Client _client;
@@ -72,9 +149,9 @@ class MagicHourService {
   void dispose() => _client.close();
 
   Map<String, String> get _headers => <String, String>{
-        'Authorization': 'Bearer ${AppConfig.magicHourApiToken}',
-        'Content-Type': 'application/json',
-      };
+    'Authorization': 'Bearer ${AppConfig.magicHourApiToken}',
+    'Content-Type': 'application/json',
+  };
 
   Future<GenerationSubmitResult> createImageJob({
     required String prompt,
@@ -82,7 +159,9 @@ class MagicHourService {
     required String resolution,
     required int imageCount,
   }) async {
-    final Uri uri = Uri.parse('${AppConfig.magicHourBaseUrl}/ai-image-generator');
+    final Uri uri = Uri.parse(
+      '${AppConfig.magicHourBaseUrl}/ai-image-generator',
+    );
     final ModelOption model = imageModels.firstWhere(
       (ModelOption item) => item.id == modelId,
       orElse: () => imageModels.first,
@@ -94,10 +173,7 @@ class MagicHourService {
       'model': modelId,
       'resolution': resolution,
       'aspect_ratio': '1:1',
-      'style': <String, dynamic>{
-        'prompt': prompt.trim(),
-        'tool': 'general',
-      },
+      'style': <String, dynamic>{'prompt': prompt.trim(), 'tool': 'general'},
     };
 
     final http.Response response = await _client.post(
@@ -112,7 +188,9 @@ class MagicHourService {
     return GenerationSubmitResult(
       jobId: (data['id'] ?? '').toString(),
       statusLabel: (data['status'] ?? 'submitted').toString(),
-      estimatedCredits: (data['estimated_credits'] as num?)?.round() ?? model.creditsPerImage * imageCount,
+      estimatedCredits:
+          (data['estimated_credits'] as num?)?.round() ??
+          model.creditsPerImage * imageCount,
       chargedCredits: (data['credits_charged'] as num?)?.round() ?? 0,
       downloads: _extractDownloads(data),
     );
@@ -154,7 +232,9 @@ class MagicHourService {
     return GenerationSubmitResult(
       jobId: (data['id'] ?? '').toString(),
       statusLabel: (data['status'] ?? 'submitted').toString(),
-      estimatedCredits: (data['estimated_credits'] as num?)?.round() ?? (model.creditsPerSecond * durationSeconds),
+      estimatedCredits:
+          (data['estimated_credits'] as num?)?.round() ??
+          (model.creditsPerSecond * durationSeconds),
       chargedCredits: (data['credits_charged'] as num?)?.round() ?? 0,
       downloads: _extractDownloads(data),
     );
@@ -165,8 +245,9 @@ class MagicHourService {
     required String jobId,
     required int fallbackProgress,
   }) async {
-    final String endpoint =
-        kind == GenerationKind.image ? '/image-projects/$jobId' : '/video-projects/$jobId';
+    final String endpoint = kind == GenerationKind.image
+        ? '/image-projects/$jobId'
+        : '/video-projects/$jobId';
     final Uri uri = Uri.parse('${AppConfig.magicHourBaseUrl}$endpoint');
     final http.Response response = await _client.get(uri, headers: _headers);
     final Map<String, dynamic> data = _decodeJson(response);
@@ -175,8 +256,13 @@ class MagicHourService {
     final List<String> downloads = _extractDownloads(data);
     final String status = (data['status'] ?? 'processing').toString();
     final int chargedCredits = (data['credits_charged'] as num?)?.round() ?? 0;
-    final String errorText = (data['error'] ?? data['message'] ?? '').toString();
-    final JobState state = _mapState(status: status, downloads: downloads, errorText: errorText);
+    final String errorText = (data['error'] ?? data['message'] ?? '')
+        .toString();
+    final JobState state = _mapState(
+      status: status,
+      downloads: downloads,
+      errorText: errorText,
+    );
     final int progress = _resolveProgress(
       state: state,
       status: status,
@@ -222,12 +308,21 @@ class MagicHourService {
       'pending',
       'in_progress',
     };
-    const Set<String> failed = <String>{'error', 'failed', 'rejected', 'canceled', 'cancelled'};
+    const Set<String> failed = <String>{
+      'error',
+      'failed',
+      'rejected',
+      'canceled',
+      'cancelled',
+    };
 
-    if (downloads.isNotEmpty || done.contains(normalized)) return JobState.completed;
-    if (failed.contains(normalized) || errorText.isNotEmpty) return JobState.failed;
+    if (downloads.isNotEmpty || done.contains(normalized))
+      return JobState.completed;
+    if (failed.contains(normalized) || errorText.isNotEmpty)
+      return JobState.failed;
     if (running.contains(normalized)) {
-      if (normalized == 'submitted' || normalized == 'queued') return JobState.submitted;
+      if (normalized == 'submitted' || normalized == 'queued')
+        return JobState.submitted;
       return JobState.running;
     }
     return JobState.running;
@@ -265,7 +360,12 @@ class MagicHourService {
         return;
       }
       if (node is Map<String, dynamic>) {
-        for (final String key in <String>['url', 'download_url', 'file_url', 'path']) {
+        for (final String key in <String>[
+          'url',
+          'download_url',
+          'file_url',
+          'path',
+        ]) {
           final dynamic value = node[key];
           if (value is String && value.startsWith('http')) links.add(value);
         }
@@ -294,7 +394,9 @@ class MagicHourService {
 
   void _throwIfFailed(http.Response response, Map<String, dynamic> data) {
     if (response.statusCode < 200 || response.statusCode > 299) {
-      final String message = (data['message'] ?? data['error'] ?? data['detail'] ?? 'API error').toString();
+      final String message =
+          (data['message'] ?? data['error'] ?? data['detail'] ?? 'API error')
+              .toString();
       throw Exception('Magic Hour: $message (${response.statusCode})');
     }
   }
