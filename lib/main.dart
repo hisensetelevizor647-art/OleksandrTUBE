@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:gallery_saver_plus/gallery_saver.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -396,6 +397,31 @@ class _StudioPageState extends State<StudioPage> {
     if (!launched && mounted) {
       setState(() {
         _infoText = 'Cannot open video URL.';
+      });
+    }
+  }
+
+  Future<void> _saveAssetToDevice(_GeneratedAsset asset) async {
+    try {
+      final bool? saved = asset.job.kind == GenerationKind.image
+          ? await GallerySaver.saveImage(
+              asset.url,
+              albumName: 'OleksandrAi Flow',
+            )
+          : await GallerySaver.saveVideo(
+              asset.url,
+              albumName: 'OleksandrAi Flow',
+            );
+      if (!mounted) return;
+      setState(() {
+        _infoText = saved == true
+            ? 'Saved to device gallery.'
+            : 'Could not save to gallery.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _infoText = 'Save failed: $error';
       });
     }
   }
@@ -1242,6 +1268,12 @@ class _StudioPageState extends State<StudioPage> {
                     ),
                   ),
                   IconButton(
+                    onPressed: () => _saveAssetToDevice(asset),
+                    icon: const Icon(Icons.download_rounded),
+                    tooltip: 'Save to device',
+                    iconSize: 20,
+                  ),
+                  IconButton(
                     onPressed: () => _openAsset(asset),
                     icon: Icon(image ? Icons.open_in_full : Icons.open_in_new),
                     tooltip: image ? 'Fullscreen' : 'Open',
@@ -1412,15 +1444,24 @@ class _StudioPageState extends State<StudioPage> {
           ],
           if (job.downloads.isNotEmpty) ...<Widget>[
             const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => _openAsset(
-                  _GeneratedAsset(job: job, url: job.downloads.first),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: <Widget>[
+                TextButton.icon(
+                  onPressed: () => _saveAssetToDevice(
+                    _GeneratedAsset(job: job, url: job.downloads.first),
+                  ),
+                  icon: const Icon(Icons.download_rounded, size: 16),
+                  label: const Text('Save'),
                 ),
-                icon: const Icon(Icons.open_in_new, size: 16),
-                label: const Text('Open result'),
-              ),
+                TextButton.icon(
+                  onPressed: () => _openAsset(
+                    _GeneratedAsset(job: job, url: job.downloads.first),
+                  ),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Open'),
+                ),
+              ],
             ),
           ],
         ],

@@ -202,8 +202,13 @@ class MagicHourService {
     required int durationSeconds,
     required String resolution,
     required bool audio,
+    String? imageFilePath,
+    String? endImageFilePath,
   }) async {
-    final Uri uri = Uri.parse('${AppConfig.magicHourBaseUrl}/text-to-video');
+    final bool hasFrame = (imageFilePath ?? '').trim().isNotEmpty;
+    final Uri uri = Uri.parse(
+      '${AppConfig.magicHourBaseUrl}${hasFrame ? '/image-to-video' : '/text-to-video'}',
+    );
     final ModelOption model = videoModels.firstWhere(
       (ModelOption item) => item.id == modelId,
       orElse: () => videoModels.first,
@@ -217,8 +222,22 @@ class MagicHourService {
       'resolution': resolution,
       'aspect_ratio': '16:9',
       'audio': audio && model.supportsAudio,
-      'style': <String, dynamic>{'prompt': prompt.trim()},
     };
+    if (hasFrame) {
+      payload['assets'] = <String, dynamic>{
+        'image_file_path': imageFilePath!.trim(),
+      };
+      final String endPath = (endImageFilePath ?? '').trim();
+      if (endPath.isNotEmpty) {
+        (payload['assets'] as Map<String, dynamic>)['end_image_file_path'] =
+            endPath;
+      }
+      if (prompt.trim().isNotEmpty) {
+        payload['style'] = <String, dynamic>{'prompt': prompt.trim()};
+      }
+    } else {
+      payload['style'] = <String, dynamic>{'prompt': prompt.trim()};
+    }
 
     final http.Response response = await _client.post(
       uri,
@@ -237,6 +256,80 @@ class MagicHourService {
           (model.creditsPerSecond * durationSeconds),
       chargedCredits: (data['credits_charged'] as num?)?.round() ?? 0,
       downloads: _extractDownloads(data),
+    );
+  }
+
+  Future<String> uploadImageBytes({
+    required List<int> bytes,
+    required String extension,
+  }) async {
+    final Uri createUri = Uri.parse(
+      '${AppConfig.magicHourBaseUrl}/files/upload-urls',
+    );
+    final Map<String, dynamic> createPayload = <String, dynamic>{
+      'items': <Map<String, dynamic>>[
+        <String, dynamic>{
+          'extension': extension.toLowerCase(),
+          'type': 'image',
+        },
+      ],
+    };
+
+    final http.Response createResponse = await _client.post(
+      createUri,
+      headers: _headers,
+      body: jsonEncode(createPayload),
+    );
+    final Map<String, dynamic> createData = _decodeJson(createResponse);
+    _throwIfFailed(createResponse, createData);
+
+    final List<dynamic> items =
+        (createData['items'] as List<dynamic>?) ?? <dynamic>[];
+    final Map<String, dynamic> uploadItem =
+        items.isNotEmpty && items.first is Map<String, dynamic>
+        ? items.first as Map<String, dynamic>
+        : createData;
+    final String uploadUrl = (uploadItem['upload_url'] ?? '').toString();
+    final String filePath = (uploadItem['file_path'] ?? '').toString();
+    if (uploadUrl.isEmpty || filePath.isEmpty) {
+      throw Exception(
+        'Magic Hour upload URL response is missing upload_url or file_path.',
+      );
+    }
+
+    final http.Response putResponse = await _client.put(
+      Uri.parse(uploadUrl),
+      headers: const <String, String>{
+        'Content-Type': 'application/octet-stream',
+      },
+      body: bytes,
+    );
+    if (putResponse.statusCode < 200 || putResponse.statusCode > 299) {
+      throw Exception(
+        'Magic Hour source image upload failed (${putResponse.statusCode}).',
+      );
+    }
+    return filePath;
+  }
+
+  Future<String> uploadImageFromUrl(
+    String url, {
+    String fallbackName = 'frame.png',
+  }) async {
+    final Uri sourceUri = Uri.parse(url);
+    final http.Response sourceResponse = await _client.get(sourceUri);
+    if (sourceResponse.statusCode < 200 || sourceResponse.statusCode > 299) {
+      throw Exception('Could not download dropped frame image.');
+    }
+    final String contentType = sourceResponse.headers['content-type'] ?? '';
+    final String extension = _inferImageExtension(
+      url: url,
+      contentType: contentType,
+      fallbackName: fallbackName,
+    );
+    return uploadImageBytes(
+      bytes: sourceResponse.bodyBytes,
+      extension: extension,
     );
   }
 
@@ -284,6 +377,41 @@ class MagicHourService {
   String _normalizeVideoApiModel(String modelId) {
     if (modelId == 'ltx-2.3') return 'ltx-2';
     return modelId;
+  }
+
+  String _inferImageExtension({
+    required String url,
+    required String contentType,
+    required String fallbackName,
+  }) {
+    final Uri uri = Uri.parse(url);
+    final String pathExt = uri.pathSegments.isEmpty
+        ? ''
+        : uri.pathSegments.last.split('.').last.toLowerCase();
+    if (<String>{'jpg', 'jpeg', 'png', 'webp', 'avif'}.contains(pathExt)) {
+      return pathExt == 'jpeg' ? 'jpg' : pathExt;
+    }
+
+    final String mime = contentType.toLowerCase();
+    if (mime.contains('jpeg') || mime.contains('jpg')) return 'jpg';
+    if (mime.contains('webp')) return 'webp';
+    if (mime.contains('avif')) return 'avif';
+    if (mime.contains('png')) return 'png';
+
+    final List<String> fallbackParts = fallbackName.toLowerCase().split('.');
+    if (fallbackParts.length > 1) {
+      final String fallbackExt = fallbackParts.last;
+      if (<String>{
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+        'avif',
+      }.contains(fallbackExt)) {
+        return fallbackExt == 'jpeg' ? 'jpg' : fallbackExt;
+      }
+    }
+    return 'png';
   }
 
   JobState _mapState({
