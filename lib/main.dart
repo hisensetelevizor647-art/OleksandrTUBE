@@ -394,6 +394,15 @@ class _StudioPageState extends State<StudioPage> {
                   ),
                 ),
                 Positioned(
+                  left: 12,
+                  bottom: 12,
+                  child: FilledButton.icon(
+                    onPressed: () => _saveAssetToDevice(asset),
+                    icon: const Icon(Icons.download_rounded),
+                    label: const Text('Download'),
+                  ),
+                ),
+                Positioned(
                   right: 8,
                   top: 8,
                   child: IconButton(
@@ -435,13 +444,13 @@ class _StudioPageState extends State<StudioPage> {
       if (!mounted) return;
       setState(() {
         _infoText = saved == true
-            ? 'Saved to device gallery.'
-            : 'Could not save to gallery.';
+            ? 'Downloaded to device gallery.'
+            : 'Could not download to gallery.';
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _infoText = 'Save failed: $error';
+        _infoText = 'Download failed: $error';
       });
     }
   }
@@ -1506,7 +1515,7 @@ class _StudioPageState extends State<StudioPage> {
                   IconButton(
                     onPressed: () => _saveAssetToDevice(asset),
                     icon: const Icon(Icons.download_rounded),
-                    tooltip: 'Save to device',
+                    tooltip: 'Download to device',
                     iconSize: 20,
                   ),
                   IconButton(
@@ -1715,7 +1724,7 @@ class _StudioPageState extends State<StudioPage> {
                     _GeneratedAsset(job: job, url: job.downloads.first),
                   ),
                   icon: const Icon(Icons.download_rounded, size: 16),
-                  label: const Text('Save'),
+                  label: const Text('Download'),
                 ),
                 TextButton.icon(
                   onPressed: () => _openAsset(
