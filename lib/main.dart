@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:gallery_saver_plus/gallery_saver.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'magic_hour_service.dart';
@@ -58,6 +60,7 @@ class _StudioPageState extends State<StudioPage> {
 
   final MagicHourService _service = MagicHourService();
   final TextEditingController _promptController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: const <String>['email', 'profile', 'openid'],
     // Client ID is configured in Google Cloud OAuth settings.
@@ -77,9 +80,14 @@ class _StudioPageState extends State<StudioPage> {
   String _videoModelId = MagicHourService.videoModels.first.id;
   String _videoResolution = '720p';
   int _videoDuration = 5;
-  String? _startFrameUrl;
-  String? _endFrameUrl;
+  String? _startFrameAssetPath;
+  String? _endFrameAssetPath;
+  String? _startFramePreviewPath;
+  String? _endFramePreviewPath;
+  bool _startFramePreviewIsLocal = false;
+  bool _endFramePreviewIsLocal = false;
   _FrameSlot _activeFrameSlot = _FrameSlot.start;
+  final List<_PromptReference> _promptReferences = <_PromptReference>[];
 
   String _imageModelId = 'nano-banana-2';
   String _imageResolution = '1k';
@@ -199,7 +207,8 @@ class _StudioPageState extends State<StudioPage> {
       ModelOption model;
 
       if (_isVideoMode) {
-        if ((_endFrameUrl ?? '').isNotEmpty && (_startFrameUrl ?? '').isEmpty) {
+        if ((_endFrameAssetPath ?? '').isNotEmpty &&
+            (_startFrameAssetPath ?? '').isEmpty) {
           throw Exception('Set Start frame first, then End frame.');
         }
         model = _videoModel;
@@ -210,18 +219,21 @@ class _StudioPageState extends State<StudioPage> {
           durationSeconds: _videoDuration,
           resolution: _videoResolution,
           audio: _videoAudio && model.supportsAudio,
-          imageFilePath: (_startFrameUrl ?? '').trim().isEmpty
+          imageFilePath: (_startFrameAssetPath ?? '').trim().isEmpty
               ? null
-              : _startFrameUrl,
-          endImageFilePath: (_endFrameUrl ?? '').trim().isEmpty
+              : _startFrameAssetPath,
+          endImageFilePath: (_endFrameAssetPath ?? '').trim().isEmpty
               ? null
-              : _endFrameUrl,
+              : _endFrameAssetPath,
         );
       } else {
         model = _imageModel;
         kind = GenerationKind.image;
+        final String submitPrompt = _promptReferences.isEmpty
+            ? prompt
+            : '$prompt\nreference_files: ${_promptReferences.map((_PromptReference item) => item.assetPath).join(', ')}';
         result = await _service.createImageJob(
-          prompt: prompt,
+          prompt: submitPrompt,
           modelId: _imageModelId,
           resolution: _imageResolution,
           imageCount: _imageCount,
@@ -455,36 +467,240 @@ class _StudioPageState extends State<StudioPage> {
     }
   }
 
-  void _assignAssetToFrame(_GeneratedAsset asset, _FrameSlot slot) {
+  Future<void> _assignAssetToFrame(
+    _GeneratedAsset asset,
+    _FrameSlot slot,
+  ) async {
     if (asset.job.kind != GenerationKind.image) return;
     setState(() {
-      if (slot == _FrameSlot.start) {
-        _startFrameUrl = asset.url;
-      } else {
-        _endFrameUrl = asset.url;
-      }
       _activeFrameSlot = slot;
       _infoText = slot == _FrameSlot.start
-          ? 'Start frame selected.'
-          : 'End frame selected.';
+          ? 'Setting start frame...'
+          : 'Setting end frame...';
     });
+    try {
+      final String uploadedPath = await _service.uploadImageFromUrl(
+        asset.url,
+        fallbackName: 'frame-${slot.name}.png',
+      );
+      if (!mounted) return;
+      setState(() {
+        _setFrame(
+          slot: slot,
+          assetPath: uploadedPath,
+          previewPath: asset.url,
+          localPreview: false,
+        );
+        _infoText = slot == _FrameSlot.start
+            ? 'Start frame selected.'
+            : 'End frame selected.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _infoText = 'Could not set frame: $error';
+      });
+    }
   }
 
   void _clearFrame(_FrameSlot slot) {
     setState(() {
       if (slot == _FrameSlot.start) {
-        _startFrameUrl = null;
-        if ((_endFrameUrl ?? '').isNotEmpty) {
-          _endFrameUrl = null;
+        _startFrameAssetPath = null;
+        _startFramePreviewPath = null;
+        _startFramePreviewIsLocal = false;
+        if ((_endFrameAssetPath ?? '').isNotEmpty) {
+          _endFrameAssetPath = null;
+          _endFramePreviewPath = null;
+          _endFramePreviewIsLocal = false;
         }
       } else {
-        _endFrameUrl = null;
+        _endFrameAssetPath = null;
+        _endFramePreviewPath = null;
+        _endFramePreviewIsLocal = false;
       }
       _activeFrameSlot = slot;
       _infoText = slot == _FrameSlot.start
           ? 'Start frame removed.'
           : 'End frame removed.';
     });
+  }
+
+  void _setFrame({
+    required _FrameSlot slot,
+    required String assetPath,
+    required String previewPath,
+    required bool localPreview,
+  }) {
+    if (slot == _FrameSlot.start) {
+      _startFrameAssetPath = assetPath;
+      _startFramePreviewPath = previewPath;
+      _startFramePreviewIsLocal = localPreview;
+      return;
+    }
+    _endFrameAssetPath = assetPath;
+    _endFramePreviewPath = previewPath;
+    _endFramePreviewIsLocal = localPreview;
+  }
+
+  Future<void> _pickAndUploadReference() async {
+    try {
+      final XFile? picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 95,
+      );
+      if (picked == null) return;
+      if (!mounted) return;
+      setState(() {
+        _infoText = 'Uploading source image...';
+      });
+      final List<int> bytes = await picked.readAsBytes();
+      final String extension = _inferExtensionFromPath(picked.path);
+      final String uploadedPath = await _service.uploadImageBytes(
+        bytes: bytes,
+        extension: extension,
+      );
+      final _PromptReference reference = _PromptReference(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        label: picked.name.isNotEmpty ? picked.name : 'image',
+        assetPath: uploadedPath,
+        previewPath: picked.path,
+        localPreview: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _promptReferences.removeWhere(
+          (_PromptReference item) => item.assetPath == reference.assetPath,
+        );
+        _promptReferences.insert(0, reference);
+        if (_isVideoMode) {
+          _setFrame(
+            slot: _activeFrameSlot,
+            assetPath: reference.assetPath,
+            previewPath: reference.previewPath,
+            localPreview: reference.localPreview,
+          );
+        } else {
+          _attachReferenceToPrompt(reference.assetPath);
+        }
+        _infoText = 'File added.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _infoText = 'File add failed: $error';
+      });
+    }
+  }
+
+  String _inferExtensionFromPath(String path) {
+    final String normalized = path.toLowerCase();
+    if (normalized.endsWith('.jpeg') || normalized.endsWith('.jpg')) {
+      return 'jpg';
+    }
+    if (normalized.endsWith('.webp')) return 'webp';
+    if (normalized.endsWith('.avif')) return 'avif';
+    return 'png';
+  }
+
+  void _attachReferenceToPrompt(String assetPath) {
+    final String tag = '[ref:$assetPath]';
+    final String current = _promptController.text.trim();
+    if (current.contains(tag)) return;
+    _promptController.text = current.isEmpty ? tag : '$current\n$tag';
+    _promptController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _promptController.text.length),
+    );
+  }
+
+  Future<void> _handleAssetDroppedToPrompt(_GeneratedAsset asset) async {
+    if (asset.job.kind != GenerationKind.image) return;
+    if (_isVideoMode) {
+      await _assignAssetToFrame(asset, _activeFrameSlot);
+      return;
+    }
+    setState(() {
+      _attachReferenceToPrompt(asset.url);
+      _promptReferences.removeWhere(
+        (_PromptReference item) => item.assetPath == asset.url,
+      );
+      _promptReferences.insert(
+        0,
+        _PromptReference(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          label: asset.job.modelLabel,
+          assetPath: asset.url,
+          previewPath: asset.url,
+          localPreview: false,
+        ),
+      );
+      _infoText = 'Image reference added to prompt.';
+    });
+  }
+
+  Future<void> _openGenerationMenu() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF0E131D),
+      isScrollControlled: true,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 22),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      const Text(
+                        'Generation menu',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  ToggleButtons(
+                    borderRadius: BorderRadius.circular(12),
+                    constraints: const BoxConstraints(
+                      minHeight: 38,
+                      minWidth: 108,
+                    ),
+                    isSelected: <bool>[_isVideoMode, !_isVideoMode],
+                    onPressed: (int index) {
+                      setState(() {
+                        _isVideoMode = index == 0;
+                      });
+                    },
+                    children: const <Widget>[
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('Video'),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('Image'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_isVideoMode) ...<Widget>[
+                    _buildVideoSettings(),
+                  ] else ...<Widget>[_buildImageSettings()],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   String _elapsedLabel(GenerationJob job) {
@@ -631,29 +847,283 @@ class _StudioPageState extends State<StudioPage> {
   }
 
   Widget _buildMobileProject(List<_GeneratedAsset> assets) {
-    return SingleChildScrollView(
+    final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final double dockHeight = _isVideoMode ? 334 : 260;
+    return Stack(
       key: const ValueKey<String>('mobile-project'),
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        children: <Widget>[
-          TextField(
-            onChanged: (String value) => setState(() => _assetSearch = value),
-            decoration: InputDecoration(
-              hintText: 'Search generated materials',
-              prefixIcon: const Icon(Icons.search),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
+      children: <Widget>[
+        Column(
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+              child: TextField(
+                onChanged: (String value) =>
+                    setState(() => _assetSearch = value),
+                decoration: InputDecoration(
+                  hintText: 'Search generated materials',
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
               ),
             ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  12,
+                  0,
+                  12,
+                  dockHeight + keyboardInset + 20,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Workspace IDE',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 280),
+                      child: _buildWorkspace(assets, compact: true),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildQueuePanel(compact: true),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: AnimatedPadding(
+            duration: const Duration(milliseconds: 170),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.fromLTRB(
+              12,
+              8,
+              12,
+              keyboardInset > 0 ? keyboardInset + 8 : 12,
+            ),
+            child: _buildMobilePromptDock(),
           ),
-          const SizedBox(height: 12),
-          _buildComposerCard(compact: true),
-          const SizedBox(height: 12),
-          _buildWorkspace(assets, compact: true),
-          const SizedBox(height: 12),
-          _buildQueuePanel(compact: true),
-          const SizedBox(height: 20),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobilePromptDock() {
+    final String modeLabel = _isVideoMode
+        ? 'Video ${_videoDuration}s'
+        : 'Image ${_imageCount}x';
+    final IconData modeIcon = _isVideoMode
+        ? Icons.videocam_outlined
+        : Icons.image_outlined;
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF2A3550)),
+        gradient: const LinearGradient(
+          colors: <Color>[Color(0xFF0D1320), Color(0xFF121A2A)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          if (_isVideoMode) ...<Widget>[
+            _buildFrameComposer(compact: true),
+            const SizedBox(height: 8),
+          ] else if (_promptReferences.isNotEmpty) ...<Widget>[
+            _buildPromptReferencesStrip(),
+            const SizedBox(height: 8),
+          ],
+          DragTarget<_GeneratedAsset>(
+            onWillAcceptWithDetails:
+                (DragTargetDetails<_GeneratedAsset> details) {
+                  return details.data.job.kind == GenerationKind.image;
+                },
+            onAcceptWithDetails: (DragTargetDetails<_GeneratedAsset> details) {
+              unawaited(_handleAssetDroppedToPrompt(details.data));
+            },
+            builder:
+                (
+                  BuildContext context,
+                  List<_GeneratedAsset?> candidateData,
+                  List<dynamic> rejectedData,
+                ) {
+                  final bool hovering = candidateData.isNotEmpty;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: hovering
+                            ? const Color(0xFF7CF1AF)
+                            : const Color(0xFF33405E),
+                      ),
+                      color: const Color(0xFF0C1321),
+                    ),
+                    child: TextField(
+                      controller: _promptController,
+                      minLines: 2,
+                      maxLines: 5,
+                      decoration: InputDecoration(
+                        border: InputBorder.none,
+                        hintText: hovering
+                            ? 'Drop image to use in prompt'
+                            : 'What do you want to create?',
+                      ),
+                    ),
+                  );
+                },
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: <Widget>[
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton(
+                  tooltip: _isVideoMode
+                      ? 'Add source frame'
+                      : 'Add image reference',
+                  onPressed: _pickAndUploadReference,
+                  icon: const Icon(Icons.add_rounded),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0xFF33405E)),
+                    color: const Color(0xFF11192A),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: Row(
+                    children: <Widget>[
+                      Icon(modeIcon, size: 17, color: const Color(0xFFD8E1F7)),
+                      const SizedBox(width: 6),
+                      Text(
+                        modeLabel,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFE3EBFF),
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${_estimatedCredits.toString()} cr',
+                        style: const TextStyle(
+                          color: Color(0xFF9FB0D4),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton(
+                  tooltip: 'Generation settings',
+                  onPressed: _openGenerationMenu,
+                  icon: const Icon(Icons.tune_rounded),
+                ),
+              ),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 44,
+                height: 44,
+                child: FilledButton(
+                  onPressed: _isSubmitting ? null : _submitGeneration,
+                  style: FilledButton.styleFrom(
+                    shape: const CircleBorder(),
+                    padding: EdgeInsets.zero,
+                  ),
+                  child: _isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.arrow_forward_rounded, size: 22),
+                ),
+              ),
+            ],
+          ),
+          if (_infoText.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(
+              _infoText,
+              style: TextStyle(
+                fontSize: 12,
+                color:
+                    _infoText.toLowerCase().contains('failed') ||
+                        _infoText.toLowerCase().contains('error')
+                    ? Colors.redAccent
+                    : const Color(0xFFC7D3EF),
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildPromptReferencesStrip() {
+    final List<_PromptReference> references = _promptReferences
+        .take(6)
+        .toList(growable: false);
+    return SizedBox(
+      height: 52,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: references.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (BuildContext context, int index) {
+          final _PromptReference item = references[index];
+          return Container(
+            width: 52,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF3C4C6E)),
+              color: const Color(0xFF101826),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: item.localPreview
+                ? Image.file(
+                    File(item.previewPath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.broken_image_outlined),
+                  )
+                : Image.network(
+                    item.previewPath,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.broken_image_outlined),
+                  ),
+          );
+        },
       ),
     );
   }
@@ -980,13 +1450,15 @@ class _StudioPageState extends State<StudioPage> {
     final Widget start = _buildFrameTarget(
       slot: _FrameSlot.start,
       label: 'Start',
-      imageUrl: _startFrameUrl,
+      previewPath: _startFramePreviewPath,
+      localPreview: _startFramePreviewIsLocal,
       compact: compact,
     );
     final Widget end = _buildFrameTarget(
       slot: _FrameSlot.end,
       label: 'End',
-      imageUrl: _endFrameUrl,
+      previewPath: _endFramePreviewPath,
+      localPreview: _endFramePreviewIsLocal,
       compact: compact,
     );
 
@@ -1024,18 +1496,19 @@ class _StudioPageState extends State<StudioPage> {
   Widget _buildFrameTarget({
     required _FrameSlot slot,
     required String label,
-    required String? imageUrl,
+    required String? previewPath,
+    required bool localPreview,
     required bool compact,
   }) {
     final bool active = _activeFrameSlot == slot;
-    final bool hasImage = (imageUrl ?? '').trim().isNotEmpty;
+    final bool hasImage = (previewPath ?? '').trim().isNotEmpty;
 
     return DragTarget<_GeneratedAsset>(
       onWillAcceptWithDetails: (DragTargetDetails<_GeneratedAsset> details) {
         return details.data.job.kind == GenerationKind.image;
       },
       onAcceptWithDetails: (DragTargetDetails<_GeneratedAsset> details) {
-        _assignAssetToFrame(details.data, slot);
+        unawaited(_assignAssetToFrame(details.data, slot));
       },
       builder:
           (
@@ -1076,14 +1549,23 @@ class _StudioPageState extends State<StudioPage> {
                       ),
                       clipBehavior: Clip.antiAlias,
                       child: hasImage
-                          ? Image.network(
-                              imageUrl!,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const Icon(
-                                Icons.broken_image_outlined,
-                                color: Color(0xFF9AA6C2),
-                              ),
-                            )
+                          ? (localPreview
+                                ? Image.file(
+                                    File(previewPath!),
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => const Icon(
+                                      Icons.broken_image_outlined,
+                                      color: Color(0xFF9AA6C2),
+                                    ),
+                                  )
+                                : Image.network(
+                                    previewPath!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => const Icon(
+                                      Icons.broken_image_outlined,
+                                      color: Color(0xFF9AA6C2),
+                                    ),
+                                  ))
                           : const Icon(
                               Icons.image_outlined,
                               color: Color(0xFF9AA6C2),
@@ -1443,7 +1925,7 @@ class _StudioPageState extends State<StudioPage> {
 
   Widget _buildAssetCard(_GeneratedAsset asset) {
     final bool image = asset.job.kind == GenerationKind.image;
-    final bool canDragToFrame = _isVideoMode && image;
+    final bool canDragImage = image;
 
     final Widget card = Container(
       decoration: BoxDecoration(
@@ -1453,8 +1935,8 @@ class _StudioPageState extends State<StudioPage> {
       ),
       child: InkWell(
         onTap: () {
-          if (canDragToFrame) {
-            _assignAssetToFrame(asset, _activeFrameSlot);
+          if (_isVideoMode && image) {
+            unawaited(_assignAssetToFrame(asset, _activeFrameSlot));
             return;
           }
           _openAsset(asset);
@@ -1500,9 +1982,9 @@ class _StudioPageState extends State<StudioPage> {
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
-                  if (canDragToFrame)
+                  if (canDragImage)
                     const Tooltip(
-                      message: 'Long press and drag to Start/End frame',
+                      message: 'Long press and drag to prompt / frame slots',
                       child: Padding(
                         padding: EdgeInsets.only(right: 2),
                         child: Icon(
@@ -1532,7 +2014,7 @@ class _StudioPageState extends State<StudioPage> {
       ),
     );
 
-    if (!canDragToFrame) return card;
+    if (!canDragImage) return card;
 
     return LongPressDraggable<_GeneratedAsset>(
       data: asset,
@@ -1747,4 +2229,20 @@ class _GeneratedAsset {
 
   final GenerationJob job;
   final String url;
+}
+
+class _PromptReference {
+  const _PromptReference({
+    required this.id,
+    required this.label,
+    required this.assetPath,
+    required this.previewPath,
+    required this.localPreview,
+  });
+
+  final String id;
+  final String label;
+  final String assetPath;
+  final String previewPath;
+  final bool localPreview;
 }

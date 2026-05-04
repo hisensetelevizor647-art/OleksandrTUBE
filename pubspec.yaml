@@ -33,6 +33,7 @@ dependencies:
 
   google_sign_in: ^6.3.0
   gallery_saver_plus: ^3.2.8
+  image_picker: ^1.1.2
   http: ^1.2.2
   url_launcher: ^6.3.1
   cupertino_icons: ^1.0.8
