@@ -36,6 +36,8 @@ class OleksandrAiFlowApp extends StatelessWidget {
 
 enum _MobileScreen { home, project }
 
+enum _FrameSlot { start, end }
+
 class StudioPage extends StatefulWidget {
   const StudioPage({super.key});
 
@@ -75,6 +77,9 @@ class _StudioPageState extends State<StudioPage> {
   String _videoModelId = MagicHourService.videoModels.first.id;
   String _videoResolution = '720p';
   int _videoDuration = 5;
+  String? _startFrameUrl;
+  String? _endFrameUrl;
+  _FrameSlot _activeFrameSlot = _FrameSlot.start;
 
   String _imageModelId = 'nano-banana-2';
   String _imageResolution = '1k';
@@ -194,6 +199,9 @@ class _StudioPageState extends State<StudioPage> {
       ModelOption model;
 
       if (_isVideoMode) {
+        if ((_endFrameUrl ?? '').isNotEmpty && (_startFrameUrl ?? '').isEmpty) {
+          throw Exception('Set Start frame first, then End frame.');
+        }
         model = _videoModel;
         kind = GenerationKind.video;
         result = await _service.createVideoJob(
@@ -202,6 +210,12 @@ class _StudioPageState extends State<StudioPage> {
           durationSeconds: _videoDuration,
           resolution: _videoResolution,
           audio: _videoAudio && model.supportsAudio,
+          imageFilePath: (_startFrameUrl ?? '').trim().isEmpty
+              ? null
+              : _startFrameUrl,
+          endImageFilePath: (_endFrameUrl ?? '').trim().isEmpty
+              ? null
+              : _endFrameUrl,
         );
       } else {
         model = _imageModel;
@@ -365,13 +379,19 @@ class _StudioPageState extends State<StudioPage> {
         context: context,
         builder: (BuildContext context) {
           return Dialog(
-            insetPadding: const EdgeInsets.all(12),
+            insetPadding: EdgeInsets.zero,
+            backgroundColor: const Color(0xFF05070C),
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.zero,
+            ),
             child: Stack(
               children: <Widget>[
                 InteractiveViewer(
                   minScale: 0.5,
                   maxScale: 4,
-                  child: Image.network(asset.url, fit: BoxFit.contain),
+                  child: SizedBox.expand(
+                    child: Image.network(asset.url, fit: BoxFit.contain),
+                  ),
                 ),
                 Positioned(
                   right: 8,
@@ -424,6 +444,38 @@ class _StudioPageState extends State<StudioPage> {
         _infoText = 'Save failed: $error';
       });
     }
+  }
+
+  void _assignAssetToFrame(_GeneratedAsset asset, _FrameSlot slot) {
+    if (asset.job.kind != GenerationKind.image) return;
+    setState(() {
+      if (slot == _FrameSlot.start) {
+        _startFrameUrl = asset.url;
+      } else {
+        _endFrameUrl = asset.url;
+      }
+      _activeFrameSlot = slot;
+      _infoText = slot == _FrameSlot.start
+          ? 'Start frame selected.'
+          : 'End frame selected.';
+    });
+  }
+
+  void _clearFrame(_FrameSlot slot) {
+    setState(() {
+      if (slot == _FrameSlot.start) {
+        _startFrameUrl = null;
+        if ((_endFrameUrl ?? '').isNotEmpty) {
+          _endFrameUrl = null;
+        }
+      } else {
+        _endFrameUrl = null;
+      }
+      _activeFrameSlot = slot;
+      _infoText = slot == _FrameSlot.start
+          ? 'Start frame removed.'
+          : 'End frame removed.';
+    });
   }
 
   String _elapsedLabel(GenerationJob job) {
@@ -770,6 +822,10 @@ class _StudioPageState extends State<StudioPage> {
             ),
           ),
           const SizedBox(height: 12),
+          if (_isVideoMode) ...<Widget>[
+            _buildFrameComposer(compact: compact),
+            const SizedBox(height: 12),
+          ],
           if (_isVideoMode) ...<Widget>[_buildVideoSettings()] else ...<Widget>[
             _buildImageSettings(),
           ],
@@ -790,7 +846,7 @@ class _StudioPageState extends State<StudioPage> {
                     child: Text(
                       _isSubmitting
                           ? 'Submitting...'
-                          : 'Generate • ${_estimatedCredits.toString()} credits',
+                          : 'Generate | ${_estimatedCredits.toString()} credits',
                     ),
                   ),
                 ),
@@ -907,6 +963,166 @@ class _StudioPageState extends State<StudioPage> {
           ],
         ],
       ),
+    );
+  }
+
+  Widget _buildFrameComposer({required bool compact}) {
+    final bool narrow = MediaQuery.sizeOf(context).width < 760;
+    final Widget start = _buildFrameTarget(
+      slot: _FrameSlot.start,
+      label: 'Start',
+      imageUrl: _startFrameUrl,
+      compact: compact,
+    );
+    final Widget end = _buildFrameTarget(
+      slot: _FrameSlot.end,
+      label: 'End',
+      imageUrl: _endFrameUrl,
+      compact: compact,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            const Icon(Icons.compare_arrows_rounded, size: 16),
+            const SizedBox(width: 6),
+            const Text('Frames', style: TextStyle(fontWeight: FontWeight.w700)),
+            const Spacer(),
+            Text(
+              'Drag image from preview grid',
+              style: TextStyle(
+                color: const Color(0xFF8D9AB7),
+                fontSize: compact ? 11.5 : 12,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (narrow) ...<Widget>[start, const SizedBox(height: 8), end] else
+          Row(
+            children: <Widget>[
+              Expanded(child: start),
+              const SizedBox(width: 10),
+              Expanded(child: end),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildFrameTarget({
+    required _FrameSlot slot,
+    required String label,
+    required String? imageUrl,
+    required bool compact,
+  }) {
+    final bool active = _activeFrameSlot == slot;
+    final bool hasImage = (imageUrl ?? '').trim().isNotEmpty;
+
+    return DragTarget<_GeneratedAsset>(
+      onWillAcceptWithDetails: (DragTargetDetails<_GeneratedAsset> details) {
+        return details.data.job.kind == GenerationKind.image;
+      },
+      onAcceptWithDetails: (DragTargetDetails<_GeneratedAsset> details) {
+        _assignAssetToFrame(details.data, slot);
+      },
+      builder:
+          (
+            BuildContext context,
+            List<_GeneratedAsset?> candidateData,
+            List<dynamic> rejectedData,
+          ) {
+            final bool hovering = candidateData.isNotEmpty;
+            return InkWell(
+              onTap: () {
+                setState(() {
+                  _activeFrameSlot = slot;
+                });
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Ink(
+                height: compact ? 84 : 94,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: hovering
+                        ? const Color(0xFF7CF1AF)
+                        : (active
+                              ? const Color(0xFF98ADF8)
+                              : const Color(0xFF33405E)),
+                    width: hovering ? 1.4 : 1,
+                  ),
+                  color: const Color(0xFF0F1727),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Container(
+                      width: compact ? 64 : 72,
+                      margin: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        color: const Color(0xFF121E33),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: hasImage
+                          ? Image.network(
+                              imageUrl!,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.broken_image_outlined,
+                                color: Color(0xFF9AA6C2),
+                              ),
+                            )
+                          : const Icon(
+                              Icons.image_outlined,
+                              color: Color(0xFF9AA6C2),
+                            ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              label,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: active
+                                    ? const Color(0xFFE7EEFF)
+                                    : const Color(0xFFC9D5F5),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              hasImage
+                                  ? 'Frame selected'
+                                  : (hovering
+                                        ? 'Drop image now'
+                                        : 'Tap to activate slot'),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF92A0C0),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (hasImage)
+                      IconButton(
+                        tooltip: 'Clear frame',
+                        onPressed: () => _clearFrame(slot),
+                        icon: const Icon(Icons.close_rounded, size: 18),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
     );
   }
 
@@ -1218,14 +1434,22 @@ class _StudioPageState extends State<StudioPage> {
 
   Widget _buildAssetCard(_GeneratedAsset asset) {
     final bool image = asset.job.kind == GenerationKind.image;
-    return Container(
+    final bool canDragToFrame = _isVideoMode && image;
+
+    final Widget card = Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFF313B57)),
         color: const Color(0xFF121824),
       ),
       child: InkWell(
-        onTap: () => _openAsset(asset),
+        onTap: () {
+          if (canDragToFrame) {
+            _assignAssetToFrame(asset, _activeFrameSlot);
+            return;
+          }
+          _openAsset(asset);
+        },
         borderRadius: BorderRadius.circular(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1267,6 +1491,18 @@ class _StudioPageState extends State<StudioPage> {
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
+                  if (canDragToFrame)
+                    const Tooltip(
+                      message: 'Long press and drag to Start/End frame',
+                      child: Padding(
+                        padding: EdgeInsets.only(right: 2),
+                        child: Icon(
+                          Icons.pan_tool_alt_outlined,
+                          size: 17,
+                          color: Color(0xFF8FA6DC),
+                        ),
+                      ),
+                    ),
                   IconButton(
                     onPressed: () => _saveAssetToDevice(asset),
                     icon: const Icon(Icons.download_rounded),
@@ -1285,6 +1521,33 @@ class _StudioPageState extends State<StudioPage> {
           ],
         ),
       ),
+    );
+
+    if (!canDragToFrame) return card;
+
+    return LongPressDraggable<_GeneratedAsset>(
+      data: asset,
+      feedback: Material(
+        color: Colors.transparent,
+        child: SizedBox(
+          width: 132,
+          height: 86,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.network(
+              asset.url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Container(
+                color: const Color(0xFF0F1727),
+                alignment: Alignment.center,
+                child: const Icon(Icons.image_outlined),
+              ),
+            ),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.45, child: card),
+      child: card,
     );
   }
 
@@ -1379,7 +1642,7 @@ class _StudioPageState extends State<StudioPage> {
     }
 
     final String subtitle =
-        '${job.prompt}\n${job.progress}% • ${_elapsedLabel(job)} • est ${job.estimatedCredits} • charged ${job.chargedCredits}';
+        '${job.prompt}\n${job.progress}% | ${_elapsedLabel(job)} | est ${job.estimatedCredits} | charged ${job.chargedCredits}';
 
     return Container(
       decoration: BoxDecoration(
